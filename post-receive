@@ -1,0 +1,70 @@
+#!/bin/bash
+#
+# This git hook sends an email at every commit.
+#
+# Made by Claudio Scordino (2011)
+#
+# To enable this hook:
+#
+# 1. Write in the config file:
+#
+# [emailnotify]
+#	mailinglist = receiver1@xyz.com,receiver2@xyz.com
+#	projectname = PROJECTNAME
+#	smtpserver = SMTPSERVER
+#	sizelimit = 1024000
+#
+# or type
+#
+# git config emailnotify.mailinglist receiver1@xyz.com,receiver2@xyz.com
+# git config emailnotify.projectname PROJECTNAME
+# git config emailnotify.smtpserver = SMTPSERVER
+# git config emailnotify.sizelimit = 1024000
+#
+# 2. Make the script executable:
+#
+# 	chmod +x post-receive
+
+recipients=$(git config emailnotify.mailinglist)
+smtpserver=$(git config emailnotify.smtpserver)
+projectname=$(git config emailnotify.projectname)
+sizelimit=$(git config emailnotify.sizelimit)
+
+read oldrev newrev refname
+
+# Temporary directory where patches are saved
+TMP_DIR="/tmp/$projectname"
+
+# Remove old directory (if any)
+rm -fr $TMP_DIR
+
+# How many commits we have to send
+COMMITS_NB=`git log --pretty=oneline $oldrev..$newrev | wc -l`
+
+branch=`echo $refname | sed 's#.*\/##'`
+
+# Generating patches
+git format-patch --subject-prefix="$projectname $branch" --numbered -M -s -$COMMITS_NB -o $TMP_DIR $branch
+
+# Cutting big patches
+for file in `ls $TMP_DIR`; do
+	SIZE=`ls -l $TMP_DIR/$file | awk '{print $5}'`
+	if [[ "$SIZE" -le "$sizelimit" ]]; then
+		echo "Size ok: $SIZE"
+	else
+		echo "Size too big for file $TMP_DIR/$file. Cutting the file."
+		cat $TMP_DIR/$file | head -`grep -T -n "diff --git" $TMP_DIR/$file | awk '{print $1'} | head -1` > $TMP_DIR/$file
+	fi
+done
+
+recipients=`echo $recipients | sed 's#\,# -cc #g'`
+
+author_email=`git show $branch | grep Author | head -1 | sed 's/\ /\n/g' | grep "@" | head -1`
+
+git send-email --no-signed-off-by-cc --to $recipients --from $author_email \
+--smtp-server $smtpserver $TMP_DIR
+
+rm -fr $TMP_DIR
+
+echo "Mail sent"
+
